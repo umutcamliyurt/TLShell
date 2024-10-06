@@ -26,13 +26,24 @@ This tool is made for educational purposes only. The developer is not responsibl
 
 <!-- INSTALLATION -->
 ## Installation:
-    $ sudo apt update
-    $ sudo apt install openssl
-    $ git clone https://github.com/umutcamliyurt/TLShell.git
-    $ cd TLShell/
-    $ openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 36500 -nodes
-    $ g++ server.cpp -o server -lssl -lcrypto
-    $ g++ client.cpp -o client -lssl -lcrypto
+     sudo apt update
+     sudo apt install openssl
+     sudo apt install mingw-w64
+     sudo apt install libssl-dev
+     wget https://www.openssl.org/source/openssl-1.1.1w.tar.gz
+     tar -xzf openssl-1.1.1w.tar.gz
+     cd openssl-1.1.1w
+     ./Configure mingw64 no-shared --cross-compile-prefix=x86_64-w64-mingw32- --prefix=/usr/local/openssl-mingw
+     make
+     make install
+     cd ..
+     git clone https://github.com/umutcamliyurt/TLShell.git
+     cd TLShell/
+     openssl req -x509 -newkey rsa:2048 -keyout server.key -out server.crt -days 36500 -nodes
+     g++ server.cpp -o server -lssl -lcrypto
+     g++ client.cpp -o client -lssl -lcrypto
+     x86_64-w64-mingw32-g++ client_windows.cpp -o client.exe -I"/usr/local/openssl-mingw/Program Files/OpenSSL/include" -L"/usr/local/openssl-mingw/Program Files/OpenSSL/lib" -lssl -lcrypto -lws2_32 -lcrypt32 -static
+
 
 
 ## Demo:
@@ -68,6 +79,10 @@ Connected to server 127.0.0.1:8080!
 ## Results:
 
 ![screenshot](image.png)
+*Image 1: Results for Linux.*
+
+![screenshot](image2.png)
+*Image 2: Results for Windows.*
 
 <!-- LICENSE -->
 ## License
